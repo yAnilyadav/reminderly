@@ -1,0 +1,23 @@
+{
+  "name": "clinic_backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "migrate": "npx sequelize-cli db:migrate",
+    "start:with-migrations": "npm run migrate && npm start"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mysql2": "^3.16.1",
+    "sequelize": "^6.37.7",
+    "sequelize-cli": "^6.6.5",
+    "uuid": "^13.0.0"
+  }
+}
