@@ -3,6 +3,7 @@
 require('dotenv').config();
 const express = require('express');
 const sequelize = require('./config/db');
+const cors = require('cors');
 
 // Initialize models
 const { DataTypes } = require('sequelize');
@@ -11,6 +12,12 @@ const models = initModels(sequelize, DataTypes);
 
 const app = express();
 app.use(express.json());
+
+app.use(cors({
+  origin: '*', // Allow all - quick fix for testing
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 // Import routes
 const doctorOnboardingRoutes = require('./routes/doctor/onboarding');
