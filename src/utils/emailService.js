@@ -352,3 +352,122 @@ exports.testSendGrid = async () => {
     };
   }
 };
+
+// utils/emailService.js - Add OTP email function
+exports.sendOtpEmail = async (email, otpCode, doctorName) => {
+    try {
+      const footer = getEmailFooter();
+      
+      const msg = {
+        to: email,
+        from: process.env.EMAIL_FROM || 'Reminderly <noreply@patientfollowup.com>',
+        subject: 'Your Verification Code - Patient Follow-Up System',
+        html: `
+          <!DOCTYPE html>
+          <html>
+          <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+              <!-- Header -->
+              <div style="background: #4F46E5; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0;">
+                <h1 style="margin: 0;">Reminderly</h1>
+                <p style="margin: 5px 0 0 0;">Patient Follow-Up System</p>
+              </div>
+              
+              <!-- Content -->
+              <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 8px 8px;">
+                <h2 style="color: #333; margin-top: 0;">Hello ${doctorName || 'Doctor'},</h2>
+                <p>Thank you for registering with Reminderly. Use the OTP below to verify your email address:</p>
+                
+                <!-- OTP Display -->
+                <div style="text-align: center; margin: 40px 0;">
+                  <div style="font-size: 48px; font-weight: bold; letter-spacing: 15px; color: #4F46E5; margin: 20px 0;">
+                    ${otpCode.split('').join(' ')}
+                  </div>
+                  <p style="font-size: 18px; color: #666;">Verification Code</p>
+                </div>
+                
+                <!-- Instructions -->
+                <div style="background: #EFF6FF; padding: 20px; border-radius: 8px; margin: 30px 0;">
+                  <h3 style="color: #1E40AF; margin-top: 0;">How to use this OTP:</h3>
+                  <ol style="padding-left: 20px;">
+                    <li>Go to the verification page on our app</li>
+                    <li>Enter the 4-digit code above</li>
+                    <li>Click "Verify Email"</li>
+                  </ol>
+                </div>
+                
+                <!-- Security Notes -->
+                <div style="background: #FEF2F2; padding: 15px; border-radius: 5px; border-left: 4px solid #DC2626;">
+                  <p style="margin: 0; color: #DC2626;">
+                    <strong>Security Notice:</strong>
+                  </p>
+                  <ul style="margin: 10px 0 0 0; padding-left: 20px; color: #666;">
+                    <li>This OTP is valid for <strong>10 minutes</strong></li>
+                    <li>Do not share this code with anyone</li>
+                    <li>If you didn't request this, please ignore this email</li>
+                  </ul>
+                </div>
+                
+                <p style="margin-top: 30px; font-size: 14px; color: #666;">
+                  Need help? Contact our support team.
+                </p>
+              </div>
+              
+              ${footer}
+            </div>
+          </body>
+          </html>
+        `,
+        text: `Hello ${doctorName || 'Doctor'},
+  
+  Thank you for registering with Reminderly. Use this OTP to verify your email:
+  
+  🔐 Verification Code: ${otpCode}
+  
+  This OTP is valid for 10 minutes.
+  
+  How to use:
+  1. Go to the verification page on our app
+  2. Enter the 4-digit code above
+  3. Click "Verify Email"
+  
+  Security Notice:
+  • This OTP expires in 10 minutes
+  • Do not share this code with anyone
+  • If you didn't request this, please ignore this email
+  
+  Need help? Contact our support team.
+  
+  ---
+  © ${new Date().getFullYear()} Reminderly - Patient Follow-Up System
+  ${process.env.COMPANY_ADDRESS || 'Your Clinic Address'}
+  Contact Support: support@patientfollowup.com`
+      };
+  
+      if (!process.env.SENDGRID_API_KEY) {
+        console.log('📧 OTP would be sent to:', email);
+        console.log('🔢 OTP Code:', otpCode);
+        return { success: true, otp: otpCode };
+      }
+  
+      await sgMail.send(msg);
+      console.log(`✅ OTP email sent to ${email}`);
+      
+      return { 
+        success: true, 
+        otp: otpCode // Return for development/testing
+      };
+      
+    } catch (error) {
+      console.error('❌ Error sending OTP email:', error.response?.body || error.message);
+      
+      // Fallback: Log OTP for development
+      console.log('📧 OTP for', email, ':', otpCode);
+      
+      return { 
+        success: false, 
+        error: error.message,
+        otp: otpCode // Still return OTP for manual verification
+      };
+    }
+  };
