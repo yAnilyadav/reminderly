@@ -347,7 +347,7 @@ exports.login = async (req, res) => {
     // Check password
     const isPasswordValid = await comparePassword(password, doctor.passwordHash);
     if (!isPasswordValid) {
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
         message: 'Invalid email or password'
       });
