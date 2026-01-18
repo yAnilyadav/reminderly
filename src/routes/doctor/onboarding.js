@@ -6,8 +6,8 @@ const authMiddleware = require('../../middlewares/auth.middleware');
 
 // Public routes - no authentication required
 router.post('/signup', onboardingController.signup);
-router.post('/resend-verification', onboardingController.resendVerification);
-router.get('/verify-email', onboardingController.verifyEmail);
+router.post('/verify-otp', onboardingController.verifyOtp);      // NEW: Verify OTP
+router.post('/resend-otp', onboardingController.resendOtp);
 router.post('/login', onboardingController.login);
 router.post('/forgot-password', onboardingController.forgotPassword);
 router.post('/reset-password', onboardingController.resetPassword);

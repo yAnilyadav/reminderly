@@ -34,15 +34,20 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: false,
       field: 'email_verified'
     },
-    verificationToken: {
-      type: DataTypes.STRING,
-      field: 'verification_token',
+    otpCode: {
+      type: DataTypes.STRING(6),
+      field: 'otp_code',
       allowNull: true
     },
-    verificationTokenExpires: {
+    otpExpires: {
       type: DataTypes.DATE,
-      field: 'verification_token_expires',
+      field: 'otp_expires',
       allowNull: true
+    },
+    otpAttempts: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      field: 'otp_attempts'
     },
     isActive: {
       type: DataTypes.BOOLEAN,
