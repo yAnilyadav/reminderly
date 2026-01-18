@@ -319,7 +319,7 @@ exports.login = async (req, res) => {
     // Find doctor
     const doctor = await Doctor.findOne({ where: { email } });
     if (!doctor) {
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
         message: 'Invalid email or password'
       });
