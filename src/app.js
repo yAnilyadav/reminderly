@@ -23,11 +23,13 @@ app.use(cors({
 const doctorOnboardingRoutes = require('./routes/doctor/onboarding');
 const doctorVisitRoutes = require('./routes/doctor/visit');
 const doctorPatientRoutes = require('./routes/doctor/doctorPatient');
+const reminderRoutes = require('./routes/doctor/reminder');
 
 // Routes
 app.use('/api/doctors', doctorOnboardingRoutes);
 app.use('/api/visits',doctorVisitRoutes)
 app.use('/api/doctorPatients',doctorPatientRoutes)
+app.use('/api/reminders',reminderRoutes)
 
 // Health check
 app.get('/', (req, res) => {

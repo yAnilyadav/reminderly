@@ -49,6 +49,17 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATEONLY,
       field: 'next_scheduled_visit'
     },
+    reminderCount: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      field: 'reminder_count'
+    },
+    
+    lastReminderSent: {
+      type: DataTypes.DATE,
+      field: 'last_reminder_sent',
+      allowNull: true
+    }
   }, {
     tableName: 'doctor_patients',
     underscored: true,
