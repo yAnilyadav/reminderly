@@ -6,5 +6,7 @@ const authMiddleware = require('../../middlewares/auth.middleware');
 
 // Create visit (requires authentication)
 router.post('/', authMiddleware, visitController.createVisit);
+router.get('/overdue', authMiddleware, visitController.getOverduePatients);
+router.get('/today', authMiddleware, visitController.getTodayExpectedVisits);
 
 module.exports = router;
