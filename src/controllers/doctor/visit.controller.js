@@ -4,7 +4,8 @@ const {
   PatientPhone, 
   DoctorPatient, 
   DoctorPatientPhone, 
-  Visit 
+  Visit ,
+  Reminder
 } = require('../../models')(sequelize, require('sequelize').DataTypes);
 const { Op } = require('sequelize');
 
@@ -104,7 +105,9 @@ exports.createVisit = async (req, res) => {
     // 5. UPDATE last_visit_date on DoctorPatient
     await DoctorPatient.update(
       { lastVisitDate: actualVisitDate,
-        nextScheduledVisit: nextVisitDate || null 
+        nextScheduledVisit: nextVisitDate || null ,
+        reminderCount: 0, // RESET counter
+        lastReminderSent: null // Clear last reminder
       },
       {
         where: { id: doctorPatient.id },
@@ -152,20 +155,20 @@ exports.createVisit = async (req, res) => {
   }
 };
 
-
 exports.getOverduePatients = async (req, res) => {
   try {
     const doctorId = req.doctorId;
-    const today = new Date().toISOString().split('T')[0];
+    const todayDate = new Date(); // Create Date object
+    const todayString = todayDate.toISOString().split('T')[0]; // Get YYYY-MM-DD string
 
-    // Get overdue patients with their latest visit for diagnosis
-    const overduePatients = await DoctorPatient.findAll({
+    // Solution 1: Use CURDATE() - Most reliable
+    const patients = await DoctorPatient.findAll({
       where: { 
         doctorId: doctorId,
         isActive: true,
         nextScheduledVisit: {
           [Op.ne]: null,
-          [Op.lt]: today  // Overdue
+          [Op.lt]: todayString  // Use MySQL's current date
         }
       },
       include: [
@@ -175,60 +178,146 @@ exports.getOverduePatients = async (req, res) => {
             model: PatientPhone,
             attributes: ['phoneNumber']
           }]
-        },
-        {
-          model: Visit,
-          as: 'Visits',
-          separate: true,
-          order: [['visitDate', 'DESC']],
-          limit: 1,  // Get only latest visit for diagnosis
-          attributes: ['diagnosis']  // Only need diagnosis
         }
       ],
-      order: [['nextScheduledVisit', 'ASC']]  // Most overdue first
+      order: [['nextScheduledVisit', 'ASC']] // Most overdue first
     });
+    console.log(patients,">>>>>")
+    // For each patient, get latest diagnosis
+    const patientsWithDetails = await Promise.all(
+      patients.map(async (patient) => {
+        // Get latest diagnosis (optional)
+        const latestVisit = await Visit.findOne({
+          where: {
+            doctorPatientId: patient.id
+          },
+          order: [['visitDate', 'DESC']],
+          attributes: ['diagnosis']
+        });
 
-    // Format response
-    const formattedPatients = overduePatients.map(patient => {
-      // Get phone number
-      let phone = '';
-      if (patient.DoctorPatientPhones && patient.DoctorPatientPhones.length > 0) {
-        const primaryPhone = patient.DoctorPatientPhones.find(p => p.isPrimary);
-        if (primaryPhone && primaryPhone.PatientPhone) {
-          phone = primaryPhone.PatientPhone.phoneNumber;
-        } else {
-          phone = patient.DoctorPatientPhones[0].PatientPhone.phoneNumber;
+        // Get phone number
+        let phone = '';
+        if (patient.DoctorPatientPhones && patient.DoctorPatientPhones.length > 0) {
+          const primaryPhone = patient.DoctorPatientPhones.find(p => p.isPrimary);
+          if (primaryPhone && primaryPhone.PatientPhone) {
+            phone = primaryPhone.PatientPhone.phoneNumber;
+          } else {
+            phone = patient.DoctorPatientPhones[0].PatientPhone.phoneNumber;
+          }
         }
-      }
 
-      // Get diagnosis from latest visit
-      const diagnosis = patient.Visits && patient.Visits[0] 
-        ? patient.Visits[0].diagnosis 
-        : null;
+        // Calculate days overdue - Use Date objects for calculation
+        const nextVisitDate = new Date(patient.nextScheduledVisit);
+        const daysOverdue = Math.floor(
+          (todayDate - nextVisitDate) / (1000 * 60 * 60 * 24)
+        );
 
-      // Calculate days overdue
-      const daysOverdue = Math.floor(
-        (new Date(today) - new Date(patient.nextScheduledVisit)) / (1000 * 60 * 60 * 24)
-      );
+        // Calculate reminder stats from DoctorPatient fields
+        let daysSinceLastReminder = null;
+        let hoursSinceLastReminder = null;
+        let canSendReminder = true;
+        let nextReminderTime = null;
+        
+        if (patient.lastReminderSent) {
+          const lastReminderDate = new Date(patient.lastReminderSent);
+          const timeDiff = todayDate - lastReminderDate;
+          daysSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+          hoursSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60));
+          
+          // Can send if last reminder was more than 24 hours ago
+          canSendReminder = hoursSinceLastReminder >= 24;
+          
+          // Calculate when next reminder can be sent
+          if (!canSendReminder) {
+            const nextAllowedTime = new Date(lastReminderDate.getTime() + (24 * 60 * 60 * 1000));
+            nextReminderTime = nextAllowedTime;
+          }
+        }
 
-      return {
-        patientId: patient.id,
-        patientName: patient.name,
-        phone: phone,
-        diagnosis: diagnosis,
-        lastVisitDate: patient.lastVisitDate,
-        expectedVisitDate: patient.nextScheduledVisit,
-        daysOverdue: daysOverdue,
-        canSendReminder: true
-      };
-    });
+        // Create status messages
+        let reminderStatus = '';
+        let reminderButtonText = 'Send Reminder';
+        let reminderButtonDisabled = !canSendReminder;
+        let reminderTooltip = '';
+        
+        if (patient.reminderCount === 0) {
+          reminderStatus = 'No reminders sent yet';
+          reminderTooltip = 'Send first reminder to patient';
+        } else {
+          reminderStatus = `${patient.reminderCount} reminder${patient.reminderCount !== 1 ? 's' : ''} sent`;
+          
+          if (patient.lastReminderSent) {
+            if (daysSinceLastReminder === 0) {
+              reminderStatus += `, last one ${hoursSinceLastReminder} hour${hoursSinceLastReminder !== 1 ? 's' : ''} ago`;
+            } else {
+              reminderStatus += `, last one ${daysSinceLastReminder} day${daysSinceLastReminder !== 1 ? 's' : ''} ago`;
+            }
+          }
+          
+          if (!canSendReminder) {
+            const hoursToWait = 24 - hoursSinceLastReminder;
+            reminderButtonText = `Wait ${hoursToWait}h`;
+            reminderTooltip = `Can send reminder in ${hoursToWait} hour${hoursToWait !== 1 ? 's' : ''}`;
+          } else {
+            reminderTooltip = `Send reminder #${patient.reminderCount + 1}`;
+          }
+        }
+
+        return {
+          // Patient Info
+          patientId: patient.id,
+          patientName: patient.name,
+          phone: phone,
+          age: patient.age,
+          gender: patient.gender,
+          
+          // Visit Info
+          diagnosis: latestVisit ? latestVisit.diagnosis : null,
+          lastVisitDate: patient.lastVisitDate,
+          expectedVisitDate: patient.nextScheduledVisit,
+          daysOverdue: daysOverdue,
+          
+          // Reminder Stats (from DoctorPatient fields)
+          reminderCount: patient.reminderCount,
+          lastReminderSent: patient.lastReminderSent,
+          daysSinceLastReminder: daysSinceLastReminder,
+          hoursSinceLastReminder: hoursSinceLastReminder,
+          
+          // UI Controls
+          canSendReminder: canSendReminder,
+          nextReminderTime: nextReminderTime,
+          
+          // UI Display Strings
+          reminderStatus: reminderStatus,
+          reminderButtonText: reminderButtonText,
+          reminderButtonDisabled: reminderButtonDisabled,
+          reminderTooltip: reminderTooltip,
+          
+          // Urgency indicators
+          isVeryOverdue: daysOverdue > 7,
+          isModeratelyOverdue: daysOverdue > 3 && daysOverdue <= 7,
+          isRecentlyOverdue: daysOverdue <= 3
+        };
+      })
+    );
+
+    // Calculate summary statistics
+    const summary = {
+      totalPatients: patientsWithDetails.length,
+      totalRemindersSent: patientsWithDetails.reduce((sum, p) => sum + p.reminderCount, 0),
+      patientsWithReminders: patientsWithDetails.filter(p => p.reminderCount > 0).length,
+      patientsReadyForReminder: patientsWithDetails.filter(p => p.canSendReminder).length,
+      veryOverdueCount: patientsWithDetails.filter(p => p.isVeryOverdue).length,
+      moderatelyOverdueCount: patientsWithDetails.filter(p => p.isModeratelyOverdue).length,
+      recentlyOverdueCount: patientsWithDetails.filter(p => p.isRecentlyOverdue).length,
+      today: todayString  // Use string for display
+    };
 
     res.json({
       success: true,
       data: {
-        patients: formattedPatients,
-        total: formattedPatients.length,
-        today: today
+        patients: patientsWithDetails,
+        summary: summary
       }
     });
 
@@ -242,21 +331,17 @@ exports.getOverduePatients = async (req, res) => {
   }
 };
 
-
-
-
-// Get patients with expected visits for today
+// Get today's expected visits (optional - for completeness)
 exports.getTodayExpectedVisits = async (req, res) => {
   try {
     const doctorId = req.doctorId;
     const today = new Date().toISOString().split('T')[0];
 
-    // Get patients with nextScheduledVisit = today
-    const todayPatients = await DoctorPatient.findAll({
+    const patients = await DoctorPatient.findAll({
       where: { 
         doctorId: doctorId,
         isActive: true,
-        nextScheduledVisit: today  // Exactly today
+        nextScheduledVisit: today
       },
       include: [
         {
@@ -265,47 +350,28 @@ exports.getTodayExpectedVisits = async (req, res) => {
             model: PatientPhone,
             attributes: ['phoneNumber']
           }]
-        },
-        {
-          model: Visit,
-          as: 'Visits',
-          separate: true,
-          order: [['visitDate', 'DESC']],
-          limit: 1, // Get latest visit for diagnosis
-          attributes: ['diagnosis']
         }
       ],
-      order: [
-        ['name', 'ASC'] // Sort by patient name
-      ]
+      order: [['name', 'ASC']]
     });
 
-    // Format response
-    const formattedPatients = todayPatients.map(patient => {
-      // Get phone number
+    const formattedPatients = patients.map(patient => {
       let phone = '';
       if (patient.DoctorPatientPhones && patient.DoctorPatientPhones.length > 0) {
         const primaryPhone = patient.DoctorPatientPhones.find(p => p.isPrimary);
-        if (primaryPhone && primaryPhone.PatientPhone) {
-          phone = primaryPhone.PatientPhone.phoneNumber;
-        } else {
-          phone = patient.DoctorPatientPhones[0].PatientPhone.phoneNumber;
-        }
+        phone = primaryPhone ? primaryPhone.PatientPhone.phoneNumber : 
+                 patient.DoctorPatientPhones[0].PatientPhone.phoneNumber;
       }
-
-      // Get diagnosis from latest visit
-      const diagnosis = patient.Visits && patient.Visits[0] 
-        ? patient.Visits[0].diagnosis 
-        : null;
 
       return {
         patientId: patient.id,
         patientName: patient.name,
         phone: phone,
-        diagnosis: diagnosis,
         lastVisitDate: patient.lastVisitDate,
-        expectedVisitDate: patient.nextScheduledVisit, // Will be today
-        canSendReminder: true // Can send reminder for today's appointment
+        expectedVisitDate: patient.nextScheduledVisit,
+        reminderCount: patient.reminderCount,
+        lastReminderSent: patient.lastReminderSent,
+        canSendReminder: true // Always true for today's appointments
       };
     });
 
@@ -313,7 +379,7 @@ exports.getTodayExpectedVisits = async (req, res) => {
       success: true,
       data: {
         patients: formattedPatients,
-        total: todayPatients.length,
+        total: patients.length,
         today: today
       }
     });
@@ -322,8 +388,7 @@ exports.getTodayExpectedVisits = async (req, res) => {
     console.error('Get today expected visits error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching today\'s expected visits',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error fetching today\'s expected visits'
     });
   }
 };
