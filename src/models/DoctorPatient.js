@@ -26,7 +26,29 @@ module.exports = (sequelize, DataTypes) => {
     lastVisitDate: { 
         type: DataTypes.DATEONLY,
         field: 'last_visit_date'
-      }
+    },
+    
+    gender: {
+      type: DataTypes.ENUM('male', 'female', 'other'),
+      allowNull: true
+    },
+    age: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    address: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    isActive: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      field: 'is_active'
+    },
+    nextScheduledVisit: {  
+      type: DataTypes.DATEONLY,
+      field: 'next_scheduled_visit'
+    },
   }, {
     tableName: 'doctor_patients',
     underscored: true,

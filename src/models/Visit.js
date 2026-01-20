@@ -29,7 +29,11 @@ module.exports = (sequelize, DataTypes) => {
     },
     notes: { 
       type: DataTypes.TEXT 
-    }
+    },
+    diagnosis: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
   }, {
     tableName: 'visits',
     underscored: true,
