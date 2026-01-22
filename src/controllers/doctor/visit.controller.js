@@ -182,7 +182,6 @@ exports.getOverduePatients = async (req, res) => {
       ],
       order: [['nextScheduledVisit', 'ASC']] // Most overdue first
     });
-    console.log(patients,">>>>>")
     // For each patient, get latest diagnosis
     const patientsWithDetails = await Promise.all(
       patients.map(async (patient) => {
@@ -270,6 +269,7 @@ exports.getOverduePatients = async (req, res) => {
           phone: phone,
           age: patient.age,
           gender: patient.gender,
+          address:patient.address,
           
           // Visit Info
           diagnosis: latestVisit ? latestVisit.diagnosis : null,
@@ -367,6 +367,7 @@ exports.getTodayExpectedVisits = async (req, res) => {
         patientId: patient.id,
         patientName: patient.name,
         phone: phone,
+        address:patient.address,
         lastVisitDate: patient.lastVisitDate,
         expectedVisitDate: patient.nextScheduledVisit,
         reminderCount: patient.reminderCount,
