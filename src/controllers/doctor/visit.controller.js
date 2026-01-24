@@ -368,6 +368,7 @@ exports.getTodayExpectedVisits = async (req, res) => {
         patientName: patient.name,
         phone: phone,
         address:patient.address,
+        gender: patient.gender,
         lastVisitDate: patient.lastVisitDate,
         expectedVisitDate: patient.nextScheduledVisit,
         reminderCount: patient.reminderCount,
@@ -390,6 +391,211 @@ exports.getTodayExpectedVisits = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching today\'s expected visits'
+    });
+  }
+};
+
+
+// Add to src/controllers/doctor/visit.controller.js
+
+/**
+ * Get upcoming visits for the next 7 days (excluding today)
+ */
+exports.getUpcomingVisits = async (req, res) => {
+  try {
+    const doctorId = req.doctorId;
+    const today = new Date();
+    const todayString = today.toISOString().split('T')[0];
+    
+    // Calculate dates for next 7 days
+    const next7Days = new Date(today);
+    next7Days.setDate(next7Days.getDate() + 7);
+    const next7DaysString = next7Days.toISOString().split('T')[0];
+
+    // Get patients with upcoming visits in next 7 days (excluding today)
+    const patients = await DoctorPatient.findAll({
+      where: { 
+        doctorId: doctorId,
+        isActive: true,
+        nextScheduledVisit: {
+          [Op.and]: [
+            { [Op.ne]: null },
+            { [Op.gt]: todayString }, // Greater than today (excludes today)
+            { [Op.lte]: next7DaysString } // Less than or equal to next 7 days
+          ]
+        }
+      },
+      include: [
+        {
+          model: DoctorPatientPhone,
+          include: [{
+            model: PatientPhone,
+            attributes: ['phoneNumber']
+          }]
+        }
+      ],
+      order: [['nextScheduledVisit', 'ASC']] // Soonest first
+    });
+
+    // Format patient data with additional details
+    const patientsWithDetails = await Promise.all(
+      patients.map(async (patient) => {
+        // Get latest diagnosis
+        const latestVisit = await Visit.findOne({
+          where: {
+            doctorPatientId: patient.id
+          },
+          order: [['visitDate', 'DESC']],
+          attributes: ['diagnosis']
+        });
+
+        // Get phone number
+        let phone = '';
+        if (patient.DoctorPatientPhones && patient.DoctorPatientPhones.length > 0) {
+          const primaryPhone = patient.DoctorPatientPhones.find(p => p.isPrimary);
+          if (primaryPhone && primaryPhone.PatientPhone) {
+            phone = primaryPhone.PatientPhone.phoneNumber;
+          } else {
+            phone = patient.DoctorPatientPhones[0].PatientPhone.phoneNumber;
+          }
+        }
+
+        // Calculate days until appointment
+        const appointmentDate = new Date(patient.nextScheduledVisit);
+        const daysUntilAppointment = Math.ceil(
+          (appointmentDate - today) / (1000 * 60 * 60 * 24)
+        );
+
+        // Calculate reminder stats
+        let daysSinceLastReminder = null;
+        let hoursSinceLastReminder = null;
+        let canSendReminder = true;
+        let nextReminderTime = null;
+        
+        if (patient.lastReminderSent) {
+          const lastReminderDate = new Date(patient.lastReminderSent);
+          const timeDiff = today - lastReminderDate;
+          daysSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
+          hoursSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60));
+          
+          // Can send if last reminder was more than 24 hours ago
+          canSendReminder = hoursSinceLastReminder >= 24;
+          
+          if (!canSendReminder) {
+            const nextAllowedTime = new Date(lastReminderDate.getTime() + (24 * 60 * 60 * 1000));
+            nextReminderTime = nextAllowedTime;
+          }
+        }
+
+        // Create status messages
+        let reminderStatus = '';
+        let reminderButtonText = 'Send Reminder';
+        let reminderButtonDisabled = !canSendReminder;
+        let reminderTooltip = '';
+        
+        if (patient.reminderCount === 0) {
+          reminderStatus = 'No reminders sent yet';
+          reminderTooltip = 'Send first reminder to patient';
+        } else {
+          reminderStatus = `${patient.reminderCount} reminder${patient.reminderCount !== 1 ? 's' : ''} sent`;
+          
+          if (patient.lastReminderSent) {
+            if (daysSinceLastReminder === 0) {
+              reminderStatus += `, last one ${hoursSinceLastReminder} hour${hoursSinceLastReminder !== 1 ? 's' : ''} ago`;
+            } else {
+              reminderStatus += `, last one ${daysSinceLastReminder} day${daysSinceLastReminder !== 1 ? 's' : ''} ago`;
+            }
+          }
+          
+          if (!canSendReminder) {
+            const hoursToWait = 24 - hoursSinceLastReminder;
+            reminderButtonText = `Wait ${hoursToWait}h`;
+            reminderTooltip = `Can send reminder in ${hoursToWait} hour${hoursToWait !== 1 ? 's' : ''}`;
+          } else {
+            reminderTooltip = `Send reminder #${patient.reminderCount + 1}`;
+          }
+        }
+
+        // Determine urgency level
+        let urgencyLevel = 'normal';
+        if (daysUntilAppointment === 1) {
+          urgencyLevel = 'high'; // Tomorrow
+        } else if (daysUntilAppointment <= 3) {
+          urgencyLevel = 'medium'; // Next 3 days
+        }
+
+        return {
+          // Patient Info
+          patientId: patient.id,
+          patientName: patient.name,
+          phone: phone,
+          age: patient.age,
+          gender: patient.gender,
+          address: patient.address,
+          
+          // Appointment Info
+          diagnosis: latestVisit ? latestVisit.diagnosis : null,
+          lastVisitDate: patient.lastVisitDate,
+          appointmentDate: patient.nextScheduledVisit,
+          daysUntilAppointment: daysUntilAppointment,
+          
+          // Reminder Stats
+          reminderCount: patient.reminderCount,
+          lastReminderSent: patient.lastReminderSent,
+          daysSinceLastReminder: daysSinceLastReminder,
+          hoursSinceLastReminder: hoursSinceLastReminder,
+          
+          // UI Controls
+          canSendReminder: canSendReminder,
+          nextReminderTime: nextReminderTime,
+          
+          // UI Display Strings
+          reminderStatus: reminderStatus,
+          reminderButtonText: reminderButtonText,
+          reminderButtonDisabled: reminderButtonDisabled,
+          reminderTooltip: reminderTooltip,
+          
+          // Urgency indicators
+          isTomorrow: daysUntilAppointment === 1,
+          isThisWeek: daysUntilAppointment <= 7,
+          urgencyLevel: urgencyLevel,
+          
+          // Grouping flags (for UI organization)
+          group: daysUntilAppointment === 1 ? 'tomorrow' : 
+                 daysUntilAppointment <= 3 ? 'next_3_days' : 
+                 'this_week'
+        };
+      })
+    );
+
+    // Calculate summary statistics
+    const summary = {
+      totalPatients: patientsWithDetails.length,
+      tomorrowCount: patientsWithDetails.filter(p => p.isTomorrow).length,
+      next3DaysCount: patientsWithDetails.filter(p => p.daysUntilAppointment <= 3 && !p.isTomorrow).length,
+      thisWeekCount: patientsWithDetails.filter(p => p.daysUntilAppointment > 3 && p.daysUntilAppointment <= 7).length,
+      totalRemindersSent: patientsWithDetails.reduce((sum, p) => sum + p.reminderCount, 0),
+      patientsReadyForReminder: patientsWithDetails.filter(p => p.canSendReminder).length,
+      dateRange: {
+        from: todayString,
+        to: next7DaysString
+      }
+    };
+
+    res.json({
+      success: true,
+      data: {
+        patients: patientsWithDetails,
+        summary: summary
+      }
+    });
+
+  } catch (error) {
+    console.error('Get upcoming visits error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching upcoming visits',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
