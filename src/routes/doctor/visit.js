@@ -8,5 +8,6 @@ const authMiddleware = require('../../middlewares/auth.middleware');
 router.post('/', authMiddleware, visitController.createVisit);
 router.get('/overdue', authMiddleware, visitController.getOverduePatients);
 router.get('/today', authMiddleware, visitController.getTodayExpectedVisits);
+router.get('/upcoming', authMiddleware, visitController.getUpcomingVisits);
 
 module.exports = router;
