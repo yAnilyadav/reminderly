@@ -239,3 +239,191 @@ const calculateDashboardStats = async (doctorId, defaultFollowUpDays) => {
     return { overdue: 0, due_soon: 0, total: 0, on_track: 0 };
   }
 };
+
+exports.getPatientSimpleDetails = async (req, res) => {
+  try {
+    const doctorId = req.doctorId;
+    const patientId = req.params.patientId;
+
+    if (!patientId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Patient ID is required'
+      });
+    }
+
+    // Find patient with phone numbers only
+    const patient = await DoctorPatient.findOne({
+      where: { 
+        id: patientId,
+        doctorId: doctorId,
+        isActive: true
+      },
+      include: [
+        {
+          model: DoctorPatientPhone,
+          include: [{
+            model: PatientPhone,
+            attributes: ['phoneNumber', 'isPrimary']
+          }]
+        }
+      ],
+      attributes: [
+        'id', 'name', 'gender', 'age', 'address', 'notes',
+        'lastVisitDate', 'nextScheduledVisit', 'reminderCount',
+        'lastReminderSent', 'created_at'
+      ]
+    });
+
+    if (!patient) {
+      return res.status(404).json({
+        success: false,
+        message: 'Patient not found'
+      });
+    }
+
+    const patientData = patient.toJSON();
+
+    // Get primary phone number
+    let primaryPhone = '';
+    let allPhones = [];
+    
+    if (patientData.DoctorPatientPhones && patientData.DoctorPatientPhones.length > 0) {
+      patientData.DoctorPatientPhones.forEach(dpp => {
+        if (dpp.PatientPhone) {
+          const phoneInfo = {
+            phoneNumber: dpp.PatientPhone.phoneNumber,
+            isPrimary: dpp.PatientPhone.isPrimary || dpp.isPrimary
+          };
+          allPhones.push(phoneInfo);
+          
+          if (phoneInfo.isPrimary) {
+            primaryPhone = phoneInfo.phoneNumber;
+          }
+        }
+      });
+      
+      // If no primary found, use first phone
+      if (!primaryPhone && allPhones.length > 0) {
+        primaryPhone = allPhones[0].phoneNumber;
+      }
+    }
+
+    const responseData = {
+      id: patientData.id,
+      name: patientData.name,
+      gender: patientData.gender,
+      age: patientData.age,
+      address: patientData.address,
+      notes: patientData.notes,
+      phone: primaryPhone,
+      phones: allPhones,
+      lastVisitDate: patientData.lastVisitDate,
+      nextScheduledVisit: patientData.nextScheduledVisit,
+      reminderCount: patientData.reminderCount,
+      lastReminderSent: patientData.lastReminderSent,
+      createdAt: patientData.created_at
+    };
+
+    res.json({
+      success: true,
+      data: responseData,
+      message: 'Patient details retrieved successfully'
+    });
+
+  } catch (error) {
+    console.error('Get patient simple details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching patient details'
+    });
+  }
+};
+
+
+exports.searchPatientsByPhone = async (req, res) => {
+  try {
+    const doctorId = req.doctorId;
+    const phoneQuery = req.query.phone;
+
+    if (!phoneQuery || phoneQuery.length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least 3 characters to search'
+      });
+    }
+
+    // Clean the phone query
+    const cleanQuery = phoneQuery.replace(/\D/g, '');
+
+    // Find phone records matching the query
+    const phoneRecords = await PatientPhone.findAll({
+      where: { 
+        doctorId: doctorId,
+        phoneNumber: {
+          [Op.iLike]: `%${cleanQuery}%`
+        }
+      },
+      include: [
+        {
+          model: DoctorPatientPhone,
+          include: [{
+            model: DoctorPatient,
+            where: { 
+              doctorId: doctorId,
+              isActive: true
+            },
+            attributes: ['id', 'name', 'gender', 'age', 'lastVisitDate', 'nextScheduledVisit']
+          }]
+        }
+      ],
+      limit: 20
+    });
+
+    // Format results
+    const results = phoneRecords
+      .map(pr => pr.toJSON())
+      .filter(pr => pr.DoctorPatientPhones && pr.DoctorPatientPhones.length > 0)
+      .map(pr => {
+        const patientLink = pr.DoctorPatientPhones[0];
+        return {
+          patient: patientLink.DoctorPatient,
+          phone: {
+            id: pr.id,
+            phoneNumber: pr.phoneNumber,
+            isPrimary: patientLink.isPrimary || pr.isPrimary
+          },
+          matchScore: pr.phoneNumber.includes(cleanQuery) ? 'exact' : 'partial'
+        };
+      })
+      .filter(item => item.patient) // Remove any null patients
+      .map(item => ({
+        id: item.patient.id,
+        name: item.patient.name,
+        gender: item.patient.gender,
+        age: item.patient.age,
+        phone: item.phone.phoneNumber,
+        isPrimaryPhone: item.phone.isPrimary,
+        lastVisitDate: item.patient.lastVisitDate,
+        nextScheduledVisit: item.patient.nextScheduledVisit,
+        matchType: item.matchScore
+      }));
+
+    res.json({
+      success: true,
+      data: {
+        results: results,
+        count: results.length,
+        query: phoneQuery
+      },
+      message: `Found ${results.length} patients matching phone query`
+    });
+
+  } catch (error) {
+    console.error('Search patients by phone error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error searching patients by phone'
+    });
+  }
+};

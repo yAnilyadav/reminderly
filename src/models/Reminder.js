@@ -42,7 +42,13 @@ module.exports = (sequelize, DataTypes) => {
     failureReason: { 
       type: DataTypes.TEXT,
       field: 'failure_reason'
-    }
+    },
+    recipientPhone: { 
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      comment: 'Phone number the message was sent to',
+      field: 'recipient_phone'
+    },
   }, {
     tableName: 'reminders',
     underscored: true,
