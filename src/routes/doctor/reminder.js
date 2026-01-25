@@ -5,6 +5,6 @@ const reminderController = require('../../controllers/doctor/reminder.controller
 const authMiddleware = require('../../middlewares/auth.middleware');
 
 // Create visit (requires authentication)
-router.post('/', authMiddleware, reminderController.sendReminder);
+router.post('/', authMiddleware, reminderController.initiateWhatsAppReminder);
 
 module.exports = router;
