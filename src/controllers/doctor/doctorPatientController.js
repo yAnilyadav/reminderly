@@ -1,189 +1,280 @@
 const { DoctorPatient, DoctorPatientPhone, PatientPhone, Visit, Reminder } = require('../../models')(require('../../config/db'), require('sequelize').DataTypes);
 const { Op, Sequelize } = require('sequelize');
 
-// GET /api/doctor/patients?status=overdue|due-soon|all
+// GET /api/doctor/patients?search=query&page=1&limit=20
 exports.getDoctorPatients = async (req, res) => {
   try {
     const doctorId = req.doctorId;
-    const defaultFollowUpDays = 35;
     
     // Extract query parameters
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50;
-    const statusFilter = req.query.status || 'all'; // 'overdue', 'due-soon', 'all'
+    const limit = parseInt(req.query.limit) || 20;
     const search = req.query.search || '';
-    
     const offset = (page - 1) * limit;
     
-    // Base where clause
-    const whereClause = { doctorId: doctorId };
+    // Base conditions that always apply
+    const baseConditions = {
+      doctorId: doctorId,
+      isActive: true
+    };
     
-    // Add search filter
-    if (search) {
-      whereClause.name = { [Op.iLike]: `%${search}%` };
+    // Initialize search conditions array
+    let searchConditions = [];
+    let phoneSearchPatientIds = [];
+    
+    // Handle search if provided
+    if (search && search.trim() !== '') {
+      // Always search by name
+      searchConditions.push({
+        name: { [Op.like]: `%${search}%` }
+      });
+      
+      // Check if search contains digits (could be a phone number)
+      const cleanSearch = search.replace(/\D/g, '');
+      if (cleanSearch.length >= 3) {
+        try {
+          // Find patient phones matching the search
+          const phoneRecords = await PatientPhone.findAll({
+            where: {
+              doctorId: doctorId,
+              phoneNumber: { [Op.like]: `%${cleanSearch}%` }
+            },
+            include: [{
+              model: DoctorPatientPhone,
+              attributes: ['doctorPatientId']
+            }],
+            raw: true
+          });
+          
+          // Extract unique patient IDs from phone matches
+          phoneSearchPatientIds = [
+            ...new Set(
+              phoneRecords
+                .filter(record => record['DoctorPatientPhones.doctorPatientId'])
+                .map(record => record['DoctorPatientPhones.doctorPatientId'])
+            )
+          ];
+          
+          // If we found patients by phone, add to search conditions
+          if (phoneSearchPatientIds.length > 0) {
+            searchConditions.push({
+              id: { [Op.in]: phoneSearchPatientIds }
+            });
+          }
+        } catch (phoneSearchError) {
+          console.warn('Phone search error:', phoneSearchError);
+          // Continue without phone search if it fails
+        }
+      }
     }
     
-    // Get current date for calculations
-    const today = new Date();
-    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    // Build the final WHERE clause
+    let whereClause;
     
-    // Add status-specific filters
-    if (statusFilter === 'overdue') {
-      // Patients whose last visit + 35 days has passed
-      const overdueCutoffDate = new Date();
-      overdueCutoffDate.setDate(overdueCutoffDate.getDate() - defaultFollowUpDays);
-      
-      whereClause.lastVisitDate = {
-        [Op.not]: null,
-        [Op.lt]: overdueCutoffDate
+    if (searchConditions.length > 0) {
+      // We have search conditions - combine with base conditions
+      whereClause = {
+        [Op.and]: [
+          baseConditions,
+          { [Op.or]: searchConditions }
+        ]
       };
-    } 
-    else if (statusFilter === 'due-soon') {
-      // Patients whose last visit + 35 days is within next 7 days
-      const dueSoonStart = new Date();
-      dueSoonStart.setDate(dueSoonStart.getDate() - (defaultFollowUpDays - 7));
-      
-      const dueSoonEnd = new Date();
-      dueSoonEnd.setDate(dueSoonEnd.getDate() - defaultFollowUpDays);
-      
-      whereClause.lastVisitDate = {
-        [Op.not]: null,
-        [Op.between]: [dueSoonEnd, dueSoonStart]
-      };
+    } else {
+      // No search - just use base conditions
+      whereClause = baseConditions;
     }
     
-    // Get total count with filters
+    // Get total count
     const totalCount = await DoctorPatient.count({
       where: whereClause
     });
     
-    // Get paginated results
+    // Get paginated results with all necessary data
     const doctorPatients = await DoctorPatient.findAll({
       where: whereClause,
       include: [
         {
           model: DoctorPatientPhone,
-          required: false,
-          include: [{ model: PatientPhone, required: false }]
+          include: [{
+            model: PatientPhone,
+            attributes: ['id', 'phoneNumber', 'isPrimary']
+          }]
         },
         {
           model: Visit,
-          required: false,
           separate: true,
-          order: [['visit_date', 'DESC']],
-          limit: 1
-        },
-        {
-          model: Reminder,
-          required: false,
-          separate: true,
-          order: [['created_at', 'DESC']],
-          limit: 1
+          order: [['visitDate', 'DESC']],
+          limit: 1, // Get only the latest visit
+          attributes: ['id', 'visitDate', 'diagnosis', 'nextVisitDate', 'notes']
         }
       ],
-      order: statusFilter === 'overdue' 
-        ? [['lastVisitDate', 'ASC']] // Oldest overdue first
-        : [['name', 'ASC']], // Alphabetical otherwise
+      order: [['created_at', 'DESC']], // Newest patients first
       limit,
       offset
     });
     
-    // Process patients and calculate status
-    const processedPatients = [];
-    
-    doctorPatients.forEach(dp => {
-      const dpData = dp.toJSON();
-      
-      // Get phones
-      const phones = [];
-      if (dpData.DoctorPatientPhones && dpData.DoctorPatientPhones.length > 0) {
-        dpData.DoctorPatientPhones.forEach(dpp => {
-          if (dpp.PatientPhone) {
-            phones.push({
-              id: dpp.PatientPhone.id,
-              phone: dpp.PatientPhone.phoneNumber,
-              is_primary: dpp.PatientPhone.isPrimary || dpp.isPrimary
-            });
-          }
-        });
-      }
-      
-      // Get last visit
-      const lastVisitDate = dpData.lastVisitDate || 
-                           (dpData.Visits && dpData.Visits[0]?.visit_date) || 
-                           null;
-      
-      // Calculate due date and status
-      let dueDate = null;
-      let status = 'no_visit';
-      let daysOverdue = 0;
-      let daysUntilDue = 0;
-      
-      if (lastVisitDate) {
-        dueDate = new Date(lastVisitDate);
-        dueDate.setDate(dueDate.getDate() + defaultFollowUpDays);
+    // Process and format the response
+    const patients = await Promise.all(
+      doctorPatients.map(async (dp) => {
+        const patientData = dp.toJSON();
         
-        if (today > dueDate) {
-          status = 'overdue';
-          daysOverdue = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
-        } else {
-          daysUntilDue = Math.floor((dueDate - today) / (1000 * 60 * 60 * 24));
-          if (daysUntilDue <= 7) {
-            status = 'due_soon';
-          } else {
-            status = 'on_track';
+        // Get all phone numbers
+        const phones = [];
+        let primaryPhone = '';
+        
+        if (patientData.DoctorPatientPhones && patientData.DoctorPatientPhones.length > 0) {
+          patientData.DoctorPatientPhones.forEach(dpp => {
+            if (dpp.PatientPhone) {
+              const phoneInfo = {
+                id: dpp.PatientPhone.id,
+                phoneNumber: dpp.PatientPhone.phoneNumber,
+                isPrimary: dpp.PatientPhone.isPrimary || dpp.isPrimary
+              };
+              phones.push(phoneInfo);
+              
+              if (phoneInfo.isPrimary) {
+                primaryPhone = phoneInfo.phoneNumber;
+              }
+            }
+          });
+          
+          // If no primary found, use first phone
+          if (!primaryPhone && phones.length > 0) {
+            primaryPhone = phones[0].phoneNumber;
           }
         }
-      }
-      
-      // Get primary phone
-      const primaryPhone = phones.find(p => p.is_primary) || phones[0];
-      
-      processedPatients.push({
-        id: dpData.id,
-        name: dpData.name,
-        phone: primaryPhone ? primaryPhone.phone : null,
-        phones: phones,
-        last_visit: lastVisitDate,
-        calculated_due_date: dueDate,
-        status: status,
-        daysOverdue: daysOverdue,
-        daysUntilDue: daysUntilDue,
-        notes: dpData.notes,
-        created_at: dpData.created_at
-      });
-    });
+        
+        // Get latest visit info
+        const latestVisit = patientData.Visits && patientData.Visits.length > 0 
+          ? patientData.Visits[0] 
+          : null;
+        
+        // Get all reminders count for this patient
+        const totalRemindersCount = await Reminder.count({
+          where: {
+            doctorPatientId: patientData.id
+          }
+        });
+        
+        // Calculate patient status based on visits
+        let status = 'no_visit';
+        let nextVisitDate = patientData.nextScheduledVisit;
+        let lastVisitDate = patientData.lastVisitDate || (latestVisit ? latestVisit.visitDate : null);
+        
+        // Use latest visit's nextVisitDate if available
+        if (latestVisit && latestVisit.nextVisitDate) {
+          nextVisitDate = latestVisit.nextVisitDate;
+        }
+        
+        // Determine status
+        const today = new Date();
+        if (nextVisitDate) {
+          const nextVisit = new Date(nextVisitDate);
+          const timeDiff = nextVisit - today;
+          const daysDiff = Math.ceil(timeDiff / (1000 * 60 * 60 * 24));
+          
+          if (daysDiff < 0) {
+            status = 'overdue';
+          } else if (daysDiff <= 7) {
+            status = 'upcoming_soon';
+          } else {
+            status = 'upcoming';
+          }
+        } else if (lastVisitDate) {
+          status = 'follow_up_needed';
+        }
+        
+        // Check if patient was found by phone search
+        const foundByPhoneSearch = phoneSearchPatientIds.includes(patientData.id);
+        
+        // Format the response
+        return {
+          id: patientData.id,
+          name: patientData.name,
+          gender: patientData.gender,
+          age: patientData.age,
+          address: patientData.address,
+          
+          // Contact info
+          phone: primaryPhone,
+          phones: phones,
+          
+          // Medical info
+          diagnosis: latestVisit ? latestVisit.diagnosis : null,
+          lastVisitDate: lastVisitDate,
+          nextVisitDate: nextVisitDate,
+          lastVisitNotes: latestVisit ? latestVisit.notes : null,
+          
+          // Patient notes
+          notes: patientData.notes,
+          
+          // Status and tracking
+          status: status,
+          reminderCount: totalRemindersCount, // Use actual count from Reminder table
+          lastReminderSent: patientData.lastReminderSent,
+          isActive: patientData.isActive,
+          
+          // Search metadata
+          foundByPhoneSearch: foundByPhoneSearch,
+          
+          // Timestamps
+          createdAt: patientData.created_at,
+          updatedAt: patientData.updated_at
+        };
+      })
+    );
     
-    // Calculate stats for dashboard
-    const stats = await calculateDashboardStats(doctorId, defaultFollowUpDays);
+    // Calculate statistics
+    const stats = {
+      total: totalCount,
+      currentPageCount: patients.length,
+      overdueCount: patients.filter(p => p.status === 'overdue').length,
+      upcomingSoonCount: patients.filter(p => p.status === 'upcoming_soon').length,
+      upcomingCount: patients.filter(p => p.status === 'upcoming').length,
+      noVisitCount: patients.filter(p => p.status === 'no_visit').length,
+      followUpNeededCount: patients.filter(p => p.status === 'follow_up_needed').length
+    };
+    
+    // Calculate search statistics
+    const searchStats = {
+      nameMatches: patients.filter(p => 
+        p.name.toLowerCase().includes(search.toLowerCase())
+      ).length,
+      phoneMatches: patients.filter(p => p.foundByPhoneSearch).length
+    };
     
     // Build response
     res.json({
       success: true,
       data: {
-        patients: processedPatients,
+        patients: patients,
         pagination: {
-          page,
-          limit,
-          totalCount,
+          currentPage: page,
+          pageSize: limit,
+          totalItems: totalCount,
           totalPages: Math.ceil(totalCount / limit),
           hasNextPage: page < Math.ceil(totalCount / limit),
           hasPrevPage: page > 1
         },
-        stats: {
-          ...stats,
-          defaultFollowUpDays
+        stats: stats,
+        search: {
+          query: search || null,
+          stats: searchStats,
+          totalMatches: patients.length
         }
       },
-      message: `Found ${processedPatients.length} patients`
+      message: search 
+        ? `Found ${patients.length} patients matching "${search}"` 
+        : `Found ${patients.length} patients`
     });
     
   } catch (error) {
     console.error('Get doctor patients error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching patient data',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Error fetching patients',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
