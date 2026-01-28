@@ -158,8 +158,23 @@ exports.createVisit = async (req, res) => {
 exports.getOverduePatients = async (req, res) => {
   try {
     const doctorId = req.doctorId;
-    const todayDate = new Date(); // Create Date object
-    const todayString = todayDate.toISOString().split('T')[0]; // Get YYYY-MM-DD string
+    // const todayDate = new Date(); // Create Date object
+    // const todayString = todayDate.toISOString().split('T')[0]; // Get YYYY-MM-DD string
+
+    let todayDate;
+    let todayString;
+
+    if (req.query.currentDate && /^\d{4}-\d{2}-\d{2}$/.test(req.query.currentDate)) {
+      // Use date from query parameter
+      todayDate = new Date(req.query.currentDate);
+      todayString = req.query.currentDate;
+      console.log("if...",todayDate,todayString)
+    } else {
+      // Fallback to server date (UTC)
+      todayDate = new Date(); // ADD THIS LINE
+      todayString = todayDate.toISOString().split('T')[0];
+      console.log("else...",todayDate,todayString)
+    }
 
     // Solution 1: Use CURDATE() - Most reliable
     const patients = await DoctorPatient.findAll({
@@ -335,7 +350,14 @@ exports.getOverduePatients = async (req, res) => {
 exports.getTodayExpectedVisits = async (req, res) => {
   try {
     const doctorId = req.doctorId;
-    const today = new Date().toISOString().split('T')[0];
+    // const today = new Date().toISOString().split('T')[0];
+
+    let today;
+    if (req.query.currentDate && /^\d{4}-\d{2}-\d{2}$/.test(req.query.currentDate)) {
+      today = req.query.currentDate;
+    } else {
+      today = new Date().toISOString().split('T')[0];
+    }
 
     const patients = await DoctorPatient.findAll({
       where: { 
@@ -401,14 +423,29 @@ exports.getTodayExpectedVisits = async (req, res) => {
 /**
  * Get upcoming visits for the next 7 days (excluding today)
  */
+/**
+ * Get upcoming visits for the next 7 days (excluding today)
+ */
 exports.getUpcomingVisits = async (req, res) => {
   try {
     const doctorId = req.doctorId;
-    const today = new Date();
-    const todayString = today.toISOString().split('T')[0];
     
-    // Calculate dates for next 7 days
-    const next7Days = new Date(today);
+    // Get date from query parameter or use server date
+    let todayDate;
+    let todayString;
+    
+    if (req.query.currentDate && /^\d{4}-\d{2}-\d{2}$/.test(req.query.currentDate)) {
+      // Use date from query parameter
+      todayDate = new Date(req.query.currentDate);
+      todayString = req.query.currentDate;
+    } else {
+      // Fallback to server date (UTC)
+      todayDate = new Date();
+      todayString = todayDate.toISOString().split('T')[0];
+    }
+    
+    // Calculate dates for next 7 days (excluding today)
+    const next7Days = new Date(todayDate);
     next7Days.setDate(next7Days.getDate() + 7);
     const next7DaysString = next7Days.toISOString().split('T')[0];
 
@@ -446,7 +483,7 @@ exports.getUpcomingVisits = async (req, res) => {
             doctorPatientId: patient.id
           },
           order: [['visitDate', 'DESC']],
-          attributes: ['diagnosis']
+          attributes: ['diagnosis', 'visitDate', 'notes']
         });
 
         // Get phone number
@@ -463,7 +500,7 @@ exports.getUpcomingVisits = async (req, res) => {
         // Calculate days until appointment
         const appointmentDate = new Date(patient.nextScheduledVisit);
         const daysUntilAppointment = Math.ceil(
-          (appointmentDate - today) / (1000 * 60 * 60 * 24)
+          (appointmentDate - todayDate) / (1000 * 60 * 60 * 24)
         );
 
         // Calculate reminder stats
@@ -474,7 +511,7 @@ exports.getUpcomingVisits = async (req, res) => {
         
         if (patient.lastReminderSent) {
           const lastReminderDate = new Date(patient.lastReminderSent);
-          const timeDiff = today - lastReminderDate;
+          const timeDiff = todayDate - lastReminderDate;
           daysSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60 * 24));
           hoursSinceLastReminder = Math.floor(timeDiff / (1000 * 60 * 60));
           
@@ -524,6 +561,14 @@ exports.getUpcomingVisits = async (req, res) => {
           urgencyLevel = 'medium'; // Next 3 days
         }
 
+        // Format appointment date for display
+        const formattedAppointmentDate = new Date(patient.nextScheduledVisit).toLocaleDateString('en-US', {
+          weekday: 'short',
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric'
+        });
+
         return {
           // Patient Info
           patientId: patient.id,
@@ -536,7 +581,9 @@ exports.getUpcomingVisits = async (req, res) => {
           // Appointment Info
           diagnosis: latestVisit ? latestVisit.diagnosis : null,
           lastVisitDate: patient.lastVisitDate,
+          lastVisitNotes: latestVisit ? latestVisit.notes : null,
           appointmentDate: patient.nextScheduledVisit,
+          formattedAppointmentDate: formattedAppointmentDate,
           daysUntilAppointment: daysUntilAppointment,
           
           // Reminder Stats
@@ -563,7 +610,10 @@ exports.getUpcomingVisits = async (req, res) => {
           // Grouping flags (for UI organization)
           group: daysUntilAppointment === 1 ? 'tomorrow' : 
                  daysUntilAppointment <= 3 ? 'next_3_days' : 
-                 'this_week'
+                 'this_week',
+                 
+          // Status indicators
+          status: 'upcoming'
         };
       })
     );
@@ -575,11 +625,13 @@ exports.getUpcomingVisits = async (req, res) => {
       next3DaysCount: patientsWithDetails.filter(p => p.daysUntilAppointment <= 3 && !p.isTomorrow).length,
       thisWeekCount: patientsWithDetails.filter(p => p.daysUntilAppointment > 3 && p.daysUntilAppointment <= 7).length,
       totalRemindersSent: patientsWithDetails.reduce((sum, p) => sum + p.reminderCount, 0),
+      patientsWithReminders: patientsWithDetails.filter(p => p.reminderCount > 0).length,
       patientsReadyForReminder: patientsWithDetails.filter(p => p.canSendReminder).length,
       dateRange: {
         from: todayString,
         to: next7DaysString
-      }
+      },
+      today: todayString
     };
 
     res.json({
@@ -587,7 +639,8 @@ exports.getUpcomingVisits = async (req, res) => {
       data: {
         patients: patientsWithDetails,
         summary: summary
-      }
+      },
+      message: `Found ${patientsWithDetails.length} upcoming visits for the next 7 days`
     });
 
   } catch (error) {
@@ -595,7 +648,8 @@ exports.getUpcomingVisits = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching upcoming visits',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
